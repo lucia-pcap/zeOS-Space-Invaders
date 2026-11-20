@@ -1,5 +1,9 @@
 #include <libc.h>
 
+// Fichero en user mode, donde se encuentra toda la implementación
+// del juego.
+
+
 /* Syscalls */
 int write(int fd, char *buffer, int size);
 int read(char *buffer, int maxchars);
@@ -304,7 +308,7 @@ void start_wave(volatile InvadersShared *shm, int wave)
 }
 
 /* Reinicia la partida actual desde cero.
-   Mantiene fuera los datos globales como high_score y pids. */
+   Mantiene fuera los datos globales como high_score y pids */
 void reset_game(volatile InvadersShared *shm)
 {
 	shm->frame = 0;
@@ -347,6 +351,10 @@ int get_fps(void)
 	if (elapsed <= 0) return 0;
 	return 18 / elapsed;
 }
+
+
+
+// ======= FUNCIONES DE DRAW ======= //
 
 /* Dibuja el marcador superior dentro del buffer de render.
    Muestra titulo, puntos, record, oleada, FPS y controles centrados. */
@@ -446,6 +454,10 @@ void draw_world(volatile InvadersShared *shm, int fps)
 	render_flush();
 }
 
+
+
+
+
 /* Calcula los limites del bloque de marcianos vivos.
    Devuelve 0 si no queda ninguno, o 1 si encontro al menos uno. */
 int alive_alien_bounds(volatile InvadersShared *shm, int *left, int *right, int *bottom)
@@ -505,50 +517,53 @@ void move_aliens(volatile InvadersShared *shm)
 	}
 }
 
-/* Intenta crear una bala desde la nave.
-   Solo dispara si no hay otra bala activa y la partida sigue viva. */
-void try_fire(volatile InvadersShared *shm)
-{
-	if (shm->game_over) return;
-	if (shm->bullet_active) return;
+/* Intenta crear una bala desde la nave
+   Solo dispara si no hay otra bala activa y la partida sigue viva */
+void try_fire(volatile InvadersShared *shm) {
+	if (shm->game_over) return; // partida terminada -> return
+	if (shm->bullet_active) return; // ya hay bala en vuelo -> return
 
 	shm->bullet_active = 1;
-	shm->bullet_x = clamp_player_x(shm->player_x) + 1;
-	shm->bullet_y = PLAYER_Y - 1;
+	shm->bullet_x = clamp_player_x(shm->player_x) + 1; // columna de la bala
+	shm->bullet_y = PLAYER_Y - 1; // fila de la bala
 }
 
-/* Avanza la bala hacia arriba y comprueba impactos con marcianos.
-   Si acierta, mata el marciano, suma puntos y desactiva la bala. */
-void update_bullet(volatile InvadersShared *shm)
-{
-	int r;
-	int c;
+/* Avanza la bala hacia arriba y comprueba impactos con marcianos
+   Si acierta, mata el marciano, suma puntos y desactiva la bala */
+void update_bullet(volatile InvadersShared *shm) {
+	int r; // row
+	int c; // col
 	int ax;
 	int ay;
 
-	if (!shm->bullet_active) return;
+	if (!shm->bullet_active) return; // no bala
 
-	shm->bullet_y--;
+	shm->bullet_y--; // sube la bala una fila
+	// Caso en que la bala llega al límite superior
 	if (shm->bullet_y <= GAME_TOP) {
 		shm->bullet_active = 0;
 		return;
 	}
-
+	
+	// Recorremos los 20 (2x10) marcianos
 	for (r = 0; r < ALIEN_ROWS; r++) {
 		for (c = 0; c < ALIEN_COLS; c++) {
+			// Solo los q estan vivos
 			if (shm->alien_alive[r][c]) {
 				ax = shm->aliens_x + c * ALIEN_X_STEP;
 				ay = shm->aliens_y + r * ALIEN_Y_STEP;
-				if (shm->bullet_y == ay &&
-				    shm->bullet_x >= ax &&
-				    shm->bullet_x < ax + ALIEN_W) {
+				// Bala ha impactado
+				if (shm->bullet_y == ay && shm->bullet_x >= ax && shm->bullet_x < ax + ALIEN_W) {
+					// Updates
 					shm->alien_alive[r][c] = 0;
 					shm->aliens_left--;
 					shm->bullet_active = 0;
 					shm->score += 10;
+					// Si se ha superado el record se actualiza
 					if (shm->score > shm->high_score) {
 						shm->high_score = shm->score;
 					}
+					// Una bala por marciano, salimos
 					return;
 				}
 			}
@@ -558,8 +573,7 @@ void update_bullet(volatile InvadersShared *shm)
 
 /* Actualiza la logica de una iteracion de fisica.
    Mueve bala, cambia de oleada y decide cuando toca mover marcianos. */
-void advance_game(volatile InvadersShared *shm, int *alien_counter)
-{
+void advance_game(volatile InvadersShared *shm, int *alien_counter) {
 	int delay;
 
 	if (shm->game_over) return;
@@ -587,8 +601,7 @@ void advance_game(volatile InvadersShared *shm, int *alien_counter)
 
 /* Proceso padre: motor del juego y renderizador.
    Lee eventos escritos por el hijo en la pagina compartida y dibuja frames. */
-void run_engine_renderer(volatile InvadersShared *shm)
-{
+void run_engine_renderer(volatile InvadersShared *shm) {
 	int fire_seen;
 	int restart_seen;
 	int physics_counter;
@@ -601,17 +614,23 @@ void run_engine_renderer(volatile InvadersShared *shm)
 
 	fire_seen = shm->fire_count;
 	restart_seen = shm->restart_count;
+
+	// Reiniciamos los contadores a cero
 	physics_counter = 0;
 	alien_counter = 0;
 	fps = 0;
 	last_fps_ticks = gettime();
 
+	// Reiniciar pantalla
 	clear_screen();
 	render_reset();
 
+	// Mientras que no se haga pulsado la tecla 'q' (salir)
 	while (!shm->quit) {
+		// Para fijar el ritmo del juego -> 1 vuelta bucle por cada tick del reloj.
 		wait_ticks(ENGINE_TICK_DELAY);
 
+		// Caso 1. Se ha pulsado la tecla 'r' de reiniciar
 		if (restart_seen != shm->restart_count) {
 			reset_game(shm);
 			restart_seen = shm->restart_count;
@@ -619,17 +638,18 @@ void run_engine_renderer(volatile InvadersShared *shm)
 			physics_counter = 0;
 			alien_counter = 0;
 		}
-
+		// Caso 2. Se ha pulsado la tecla 'w' o espacio para disparar
 		if (fire_seen != shm->fire_count) {
 			fire_seen = shm->fire_count;
 			try_fire(shm);
 		}
 
-		physics_counter++;
+		physics_counter++; 
+		// Caso 3. Hay que avanzar el juego por cada dos ticks de reloj.
 		if (physics_counter >= PHYSICS_TICKS) {
-			physics_counter = 0;
+			physics_counter = 0; // reiniciamos contador de ticks
 			advance_game(shm, &alien_counter);
-			shm->frame++;
+			shm->frame++; // sumamos frame
 			fps = get_fps();
 			draw_world(shm, fps);
 		}
@@ -640,10 +660,9 @@ void run_engine_renderer(volatile InvadersShared *shm)
 	exit();
 }
 
-/* Proceso hijo: lector de teclado y controlador de la nave.
+/* HIJO: lector de teclado y controlador de la nave.
    Escribe player_x y contadores de eventos en la pagina compartida. */
-void run_controller(volatile InvadersShared *shm)
-{
+void run_controller(volatile InvadersShared *shm) {
 	char c;
 	int x;
 
@@ -651,22 +670,28 @@ void run_controller(volatile InvadersShared *shm)
 	shm->control_pid = getpid();
 	shm->control_ready = 1;
 
+	// Pide una tecla, si no hay el kernel lo bloquea para que no gaste CPU
 	while (!shm->quit) {
+		// Si hay teclas para leer, actualizamos la pág. compartida
 		if (read(&c, 1) == 1) {
 			shm->last_key = c;
-
 			x = shm->player_x;
+
 			if (c == 'a' || c == 'A') {
 				x--;
-				shm->player_x = clamp_player_x(x);
-			} else if (c == 'd' || c == 'D') {
+				shm->player_x = clamp_player_x(x); // para que no salga del límite hor.
+			}
+			else if (c == 'd' || c == 'D') {
 				x++;
-				shm->player_x = clamp_player_x(x);
-			} else if (c == 'w' || c == 'W' || c == ' ') {
+				shm->player_x = clamp_player_x(x); // para que no salga del límite hor.
+			}
+			else if (c == 'w' || c == 'W' || c == ' ') {
 				shm->fire_count++;
-			} else if (c == 'r' || c == 'R') {
+			}
+			else if (c == 'r' || c == 'R') {
 				shm->restart_count++;
-			} else if (c == 'q' || c == 'Q') {
+			} 
+			else if (c == 'q' || c == 'Q') {
 				shm->quit = 1;
 			}
 		}
@@ -678,33 +703,44 @@ void run_controller(volatile InvadersShared *shm)
 /* Punto de entrada del programa de usuario.
    Mapea la pagina compartida, inicializa estado, hace fork y separa roles. */
 int __attribute__((__section__(".text.main")))
-main(void)
-{
+main(void) {
 	volatile InvadersShared *shm;
 	int child_pid;
 
+	// === 1. PREPARACIÓN ===
+	// Reservamos la página compartida para el padre y el hijo
 	shm = (volatile InvadersShared *)shmat(SHM_ID, SHM_ADDR);
+
+	// Control de error
 	if (shm == (void *)-1) {
 		clear_screen();
 		print_str("ERROR: no se pudo mapear la pagina compartida\n");
 		exit();
 	}
 
+	// Reiniciar la página compartida, para limpiar la partida anterior
 	init_shared(shm);
 
+	// === 2. CREACIÓN DE PROCESO ===
 	child_pid = fork();
+	// Control de error
 	if (child_pid < 0) {
 		clear_screen();
 		print_str("ERROR: fork del proceso de control\n");
 		exit();
 	}
 
+	// HIJO : 
+	// - Mapea la página compartida porque el fork no lo hace
+	// - Entra en run controller y ya no sale 
 	if (child_pid == 0) {
 		shm = (volatile InvadersShared *)shmat(SHM_ID, SHM_ADDR);
 		if (shm == (void *)-1) exit();
 		run_controller(shm);
 	}
 
+	// PADRE:
+	// - Se encarga de controlar todo lo que sale por pantalla
 	run_engine_renderer(shm);
 	return 0;
 }
